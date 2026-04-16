@@ -21,19 +21,13 @@ from google.genai.types import Tool, GoogleSearch
 3. 定期実行 (Cron) の設定例:
    毎日 8:30 に実行する場合 (crontab -e):
    30 8 * * * export GOOGLE_API_KEY="あなたのキー"; /home/taira/mypy/bin/python3 /home/taira/tools/auto_expense_checker_v3.py
-4.料金改定があった場合の対応
-    現状 fare_master.json をrenameする形でclearする。そうしないと旧料金をmasterから読んでしまう。
 ■ ディレクトリ構造
 /home/taira/tools/
 ├── auto_expense_checker_v3.py  (このスクリプト)
-├── fare_master.json            (AIが学習した運賃データベース)
-├── processed_ids.json          (二重報告防止用の処理済みID履歴)
-└── daily_report.txt            (直近の送信レポート)
+├── fare_revision_master.json   (料金改定マスターデータ)
 
-■ 判定ロジック
-- 既知の経路: fare_master.json を参照して即座に判定。
-- 未知の経路: Gemini AIがWeb検索を行い、利用日時点の正確な運賃を調査・判定。
-- 学習機能: AIがOKと出した経路はマスターに保存され、次回から高速化されます。
+
+
 """
 
 import subprocess
@@ -106,12 +100,23 @@ def verify_with_ai(route, date_val, amount, is_round, payee):
     if not API_KEY:
         return {"status": "Error", "reason": "API_KEY未設定"}
         
+    # 料金改定マスタの読み込み
+    revision_master_path = '/home/taira/tools/fare_revision_master.json'
+    revision_info = ""
+    if os.path.exists(revision_master_path):
+        try:
+            with open(revision_master_path, 'r', encoding='utf-8') as f:
+                revision_data = json.load(f)
+                revision_info = json.dumps(revision_data, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"料金改定マスタの読み込みに失敗しました: {e}")
+
     try:
         genai.configure(api_key=API_KEY)
-        model = genai.GenerativeModel(model_name='gemini-3-flash-preview')       
+        model = genai.GenerativeModel(model_name='gemini-3.1-pro-preview')       
         prompt = f"""
-        あなたは運賃の専門家であり、最新の運賃改定情報を常に把握しています。
-        以下の鉄道運賃の妥当性を、Google検索を使用して現時点の最新運賃（特に最新の運賃改定後）で調査・判定してください。
+        あなたは正確性を最重視する運賃の専門家であり、最新の運賃情報を常に把握しています。
+        以下の交通運賃の妥当性を、webの情報を参考に利用日時点の正確な運賃（特に運賃改定情報を考慮して）で調査・判定してください。
 
         【調査対象】
         利用日: {date_val}
@@ -119,11 +124,16 @@ def verify_with_ai(route, date_val, amount, is_round, payee):
         申請金額（片道相当）: {amount}円 
 
         【判定プロセス】
-        0.「運賃改定 一覧」などのキーワードでGoogle検索を行い、最近の運賃改定情報を収集。
-        1. 最新の支払先の運賃改定（電車特定区間廃止など）を検索。ちなみにJR東日本は2026/3/14に運賃改定を行いました。
+        1. 最新の支払先の運賃改定情報を【参考：料金改定マスターデータ】を基にを検索。
         2. 利用日({date_val})がどの改定日の適用期間に該当するかを判断。
         3. その時点での正確な運賃(IC優先)を特定。
         4. 申請金額と特定した運賃を比較し、一致したら「一致」、一致でなく20円以内なら「妥当」、それ以上なら「要確認」と判断。
+        5. 根拠のない情報は含めないでください。必ず公式発表や信頼できるニュースソースに基づく情報を提供してください。
+    
+        【参考：料金改定マスターデータ】
+        以下の情報は、各社の過去および予定されている料金改定日です。判定の参考にしてください。
+        {revision_info}
+
         【回答形式】
         必ず以下のJSON形式のみで回答してください（説明不要）:
         {{
@@ -194,7 +204,7 @@ def main():
             row_fields = row_detail["forms"][0]["fields"]
             
             # 157行目付近: 作業済みチェック (aijadgeがあるか)
-            if row_fields.get("aijadge") and row_fields["aijadge"].get("value"):
+            if row_fields.get("AI判定") and row_fields["AI判定"].get("value"):
                 continue
           
             detail_id = f"{app_no}_{row['日付']['text']}_{row.get('from','')}_{row.get('to','')}_{amount_str}"
@@ -210,36 +220,25 @@ def main():
             expected = -1
             status, reason = "NG/Unknown", "AI判定失敗"
             
+            # 常にAI調査を行うため、既存のマスタールックアップをスキップ
+            """
             if route_key in master:
-                sorted_entries = sorted(master[route_key], reverse=True)
-                for key in sorted_entries:
-                    if date_val >= key:
-                        expected = master[route_key][key]["ai_correct"]
-                        reason = master[route_key][key]["reason"]
-                        break
-                if expected > 0:
-                    ai_correct = expected
-                    if unit_price == expected:
-                        status, reason = "一致", "AI調査済:調査時のコメント:" + reason
-                    elif abs(unit_price - expected) <= 20:
-                        status, reason = "妥当", "AI調査済:調査時のコメント:" + reason
-                    else:
-                        status, reason = "要確認", f"AI調査済({expected}円)と異なります:調査時のコメント: {reason}"
+                # ... (既存のルックアップ処理)
+            """
             
-            if expected == -1:
-                print(f"AI調査中: {date_val} {route_key}...")
-                ai_res = verify_with_ai(route_key, date_val, unit_price, is_round, row.get("支払先名",""))
-                if ai_res:
-                    status, reason, last_revision_date = ai_res["status"], ai_res["reason"], ai_res["last_revision_date"]
-                    if route_key not in master: master[route_key] = {}
-                    master[route_key][last_revision_date] = {
-                        "ai_correct": ai_res["correct_fare"],
-                        "reason": reason
-                    }
-                    ai_correct = ai_res["correct_fare"]
-                    master_updated = True
-                else:
-                    status, reason = "NG/Unknown", "AI判定失敗"
+            print(f"AI調査中: {date_val} {route_key}...")
+            ai_res = verify_with_ai(route_key, date_val, unit_price, is_round, row.get("支払先名",""))
+            if ai_res:
+                status, reason, last_revision_date = ai_res["status"], ai_res["reason"], ai_res["last_revision_date"]
+                if route_key not in master: master[route_key] = {}
+                master[route_key][last_revision_date] = {
+                    "ai_correct": ai_res["correct_fare"],
+                    "reason": reason
+                }
+                ai_correct = ai_res["correct_fare"]
+                master_updated = True
+            else:
+                status, reason = "NG/Unknown", "AI判定失敗"
 
             # 193行目付近: POST処理
             print(f"POST送信中: {detail_id} -> {status}")

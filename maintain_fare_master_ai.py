@@ -24,15 +24,21 @@ def update_master_with_ai():
     genai.configure(api_key=API_KEY)
     
     # 2026年3月のJR東日本の改定など、具体的なターゲットを含めて検索
-    model = genai.GenerativeModel('gemini-3-flash-preview')
+    model = genai.GenerativeModel('gemini-3.1-pro-preview')
     
     prompt = """
+    あなたは正確性を最重視する運賃の専門家であり、最新の運賃情報を常に把握しています。
     日本の鉄道会社およびバス会社の運賃改定日（特に2025年、2026年の予定）を調査してください。
     
-    以下の条件で情報を抽出してください：
+    以下の条件でwebを調査し情報を抽出してください。
+    特に 以下のページ等を参考にしてください
+    https://teiki-web.ekispert.com/blog/info_fare_revision
+    特に関東地区のバス会社については以下のページに有る会社をできるだけ含めてください
+    https://www.kouritu1000.net/bus.htm：
     1. 会社名と、その会社が実施した（または予定している）運賃改定日のリスト。
     2. 日付は YYYY/MM/DD の形式に統一してください。
     3. 2024年以前の情報も含めて構いませんが、最新の予定（2026/03/14など）を優先してください。
+    4. 根拠のない日付は含めないでください。必ず公式発表や信頼できるニュースソースに基づく情報を提供してください。
     
     回答は必ず以下の純粋なJSON形式のみで出力してください（Markdownの装飾は不要です）:
     {
