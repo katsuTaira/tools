@@ -1,0 +1,1 @@
+dev/, ./.vscode/,efs/ecs/ssh/.vscode-server/,.vscode-server/,proc/

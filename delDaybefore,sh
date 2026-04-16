@@ -1,0 +1,98 @@
+#!/bin/bash
+
+# 使用方法: ./delete_old_objects.sh バケット名 日数
+
+# 引数の確認
+if [[ $# -ne 2 ]]; then
+    echo "Usage: $0 <bucket-name> <days-ago>"
+    exit 1
+fi
+
+# バケット名と日数を引数から取得
+BUCKET_NAME="$1"
+DAYS_AGO="$2"
+
+# 現在の日付を取得
+CURRENT_DATE=$(date +%s)
+
+# 指定日数前の日付を計算
+TARGET_DATE=$(date -d "$DAYS_AGO days ago" +%s)
+
+# 一時ファイルを作成
+TEMP_FILE=$(mktemp)
+
+# バケット内のオブジェクトをリスト
+#s3cmd ls "s3://$BUCKET_NAME" > "$TEMP_FILE"
+s3cmd ls "$BUCKET_NAME" > "$TEMP_FILE"
+
+# オブジェクトをグループ化して最古のものを特定
+declare -A OLDEST_OBJECTS
+while read -r line; do
+    # オブジェクトの情報を解析
+    OBJECT_DATE=$(echo "$line" | awk '{print $1" "$2}')
+  #  OBJECT_PATH=$(echo "$line" | awk '{for (i=4; i<=NF; i++) printf $i" "; print ""}')
+    OBJECT_PATH=$(echo "$line" | awk '{print $4}')
+    #trimする
+    #OBJECT_PATH=$(echo "$OBJECT_PATH" | xargs)
+
+    # オブジェクト名を解析してキーを生成
+    FILE_NAME=$(basename "$OBJECT_PATH")
+    #echo "${FILE_NAME#.*}"
+    # .zip のみ処理
+    if [[ ! "$FILE_NAME" =~ \.zip$ ]]; then
+        continue
+    fi
+    PREFIX=$(echo "$FILE_NAME" | awk -F'_' '{print $1}')
+    DATE_PART=$(echo "$FILE_NAME" | grep -oE '[0-9]{8}')
+    YEAR_MONTH=${DATE_PART:0:6}
+
+    # オブジェクトの日付をタイムスタンプに変換
+    OBJECT_TIMESTAMP=$(date -d "$OBJECT_DATE" +%s 2>/dev/null)
+
+    # 最古のオブジェクトを更新
+    #KEY="$PREFIX-$YEAR_MONTH"
+    KEY="${PREFIX}_${YEAR_MONTH}"
+    if [[ -z "${OLDEST_OBJECTS[$KEY]}" || "$OBJECT_TIMESTAMP" -lt "${OLDEST_OBJECTS[$KEY]%%:*}" ]]; then
+        OLDEST_OBJECTS[$KEY]="$OBJECT_TIMESTAMP:$OBJECT_PATH"
+        echo "count:${#OLDEST_OBJECTS[@]}"
+        echo "set ${OLDEST_OBJECTS[$KEY]}"
+     fi
+done < "$TEMP_FILE"
+       echo "count:${#OLDEST_OBJECTS[@]}"
+
+# 古いオブジェクトを削除
+while read -r line; do
+    OBJECT_DATE=$(echo "$line" | awk '{print $1" "$2}')
+ #   OBJECT_PATH=$(echo "$line" | awk '{for (i=4; i<=NF; i++) printf $i" "; print ""}')
+    OBJECT_PATH=$(echo "$line" | awk '{print $4}')
+
+    # オブジェクト名を解析してキーを生成
+    FILE_NAME=$(basename "$OBJECT_PATH")
+    PREFIX=$(echo "$FILE_NAME" | awk -F'_' '{print $1}')
+    DATE_PART=$(echo "$FILE_NAME" | grep -oE '[0-9]{8}')
+    YEAR_MONTH=${DATE_PART:0:6}
+
+    # オブジェクトの日付をタイムスタンプに変換
+    OBJECT_TIMESTAMP=$(date -d "$OBJECT_DATE" +%s 2>/dev/null)
+
+    # キーを生成して削除対象か確認
+    KEY="${PREFIX}_${YEAR_MONTH}"
+
+    # .zip のみ処理
+    if [[ ! "$FILE_NAME" =~ \.zip$ ]]; then
+        continue
+    fi
+    if [[ "$OBJECT_TIMESTAMP" -ge "$TARGET_DATE" ]]; then
+        continue
+    fi
+    if [[ "${OLDEST_OBJECTS[$KEY]#*:}" = "$OBJECT_PATH" ]]; then
+        echo "keep object: $OBJECT_PATH"
+        continue
+    fi
+
+    echo "Deleting: $OBJECT_PATH"
+    s3cmd del "$OBJECT_PATH"
+done < "$TEMP_FILE"
+
+# 一時ファイルを削除
+rm "$TEMP_FILE"
