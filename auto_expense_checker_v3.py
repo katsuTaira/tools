@@ -35,11 +35,13 @@ import json
 import os
 import re
 from datetime import datetime
-import google.generativeai as genai
+#import google.generativeai as genai
+from google import genai
 
 # --- 設定 ---
-#BASE_URL = "https://platform.kpscorp.jp/kpspl"
-BASE_URL = "http://localhost:8080/kpspl"
+#BASE_URL = "https://platform.kpscorp.jp/kpspl"!pip install -Uqq google-generativeai
+#BASE_URL = "http://localhost:8080/kpspl"
+BASE_URL = "https://y-officesc.kpscorp.jp/platform"
 SEND_ACCOUNT = "katsusuke.taira@kpscorp.co.jp"
 # 送信先アドレスを複数指定（カンマ区切り）
 RECIPIENTS = "katsusuke.taira@kpscorp.co.jp, katsu.taira@gmail.com" 
@@ -48,6 +50,7 @@ RECIPIENTS = "katsusuke.taira@kpscorp.co.jp, katsu.taira@gmail.com"
 DATA_DIR = "/home/taira/tools/"
 MASTER_FILE = os.path.join(DATA_DIR, "fare_master.json")
 HISTORY_FILE = os.path.join(DATA_DIR, "processed_ids.json")
+BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklist_ids.json")
 REPORT_FILE = os.path.join(DATA_DIR, "daily_report.txt")
 COOKIE_FILE = os.path.join(DATA_DIR, "cookies.txt")
 
@@ -72,6 +75,9 @@ def fetch_json(url, token):
     return json.loads(result)
 
 def post_data_to_sv(url, token, data):
+    if "format=json" not in url:
+        url += ("&" if "?" in url else "?") + "format=json"
+
     # gcloud auth print-identity-token を使用した認証
     headers = [f"Authorization: Bearer {token}"]
     
@@ -112,8 +118,9 @@ def verify_with_ai(route, date_val, amount, is_round, payee):
             print(f"料金改定マスタの読み込みに失敗しました: {e}")
 
     try:
-        genai.configure(api_key=API_KEY)
-        model = genai.GenerativeModel(model_name='gemini-3.1-pro-preview')       
+        #genai.configure(api_key=API_KEY)
+        #model = genai.GenerativeModel('gemini-3.1-pro-preview') 
+        #model = genai.GenerativeModel('gemini-3-flash-preview')       
         prompt = f"""
         あなたは正確性を最重視する運賃の専門家であり、最新の運賃情報を常に把握しています。
         以下の交通運賃の妥当性を、webの情報を参考に利用日時点の正確な運賃（特に運賃改定情報を考慮して）で調査・判定してください。
@@ -137,13 +144,16 @@ def verify_with_ai(route, date_val, amount, is_round, payee):
         【回答形式】
         必ず以下のJSON形式のみで回答してください（説明不要）:
         {{
+          "thought": "判断の根拠を順番に記述（100字以内）",
           "status": "一致" または "妥当" または "要確認",
           "reason": "具体的な判断根拠",
           "correct_fare": 数値(特定した片道運賃),
           "last_revision_date": "適用した最後の改定日(YYYY/MM/DD)"
         }}
         """
-        response = model.generate_content(prompt)
+        client = genai.Client()
+        response = client.models.generate_content(model="gemini-3-flash-preview", contents=prompt)
+        #response = client.models.generate_content(model="gemini-3.1-pro-preview", contents=prompt)
         
         # JSON部分を抽出
         text = response.text
@@ -181,12 +191,18 @@ def main():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r") as f: processed_ids = json.load(f)
 
+    # ブラックリスト（エラーにより修正が必要な明細）の読み込み
+    blacklist = []
+    if os.path.exists(BLACKLIST_FILE):
+        with open(BLACKLIST_FILE, "r") as f: blacklist = json.load(f)
+
     data = fetch_json(f"{BASE_URL}/ad/Appform/table", token)
     app_table = next((t for t in data["tables"] if t.get("id") == "AppformTable"), None)
     target_apps = [row for row in app_table["rows"] if "2:申請中" in row["状態"] or "4:承認済" in row["状態"]]
 
     new_results = []
     master_updated = False
+    blacklist_updated = False
 
     for app in target_apps:
         app_no = app["申請書No."]["text"]
@@ -203,12 +219,24 @@ def main():
             row_detail = fetch_json(detail_url, token)
             row_fields = row_detail["forms"][0]["fields"]
             
+            # DB上のIDを取得
+            db_id = row_fields.get("id", {}).get("value")
+            if not db_id:
+                # 万が一取れない場合は従来の形式をフォールバックとして使用
+                db_id = f"{app_no}_{row['日付']['text']}_{row.get('from','')}_{row.get('to','')}_{amount_str}"
+
             # 157行目付近: 作業済みチェック (aijadgeがあるか)
             if row_fields.get("AI判定") and row_fields["AI判定"].get("value"):
                 continue
           
+            # ブラックリストに入っている場合はスキップ
+            if db_id in blacklist:
+                print(f"Skipping blacklisted item ID: {db_id}")
+                continue
+            
             detail_id = f"{app_no}_{row['日付']['text']}_{row.get('from','')}_{row.get('to','')}_{amount_str}"
-         # このチェックはしない     
+            
+            # このチェックはしない     
          #   if detail_id in processed_ids: continue
 
             route_key = f"{row.get('from','')}-{row.get('to','')}"
@@ -257,6 +285,28 @@ def main():
             
             post_res = post_data_to_sv(post_url, token, post_payload)
             
+            # レスポンスのチェック: エラーがあればブラックリストに追加
+            try:
+                res_json = json.loads(post_res)
+                if any(m.get("type") == "error" for m in res_json.get("messages", [])):
+                    error_details = []
+                    # フィールドごとのエラーを抽出
+                    for form in res_json.get("forms", []):
+                        for f_key, f_val in form.get("fields", {}).items():
+                            if isinstance(f_val, dict) and "error" in f_val:
+                                err_msg = f"[{f_key}] {f_val['error']}"
+                                error_details.append(err_msg)
+                    
+                    error_summary = ", ".join(error_details) if error_details else "不明な入力エラー"
+                    print(f"ERROR returned from server for ID {db_id}: {error_summary}")
+                    
+                    if db_id not in blacklist:
+                        blacklist.append(db_id)
+                        blacklist_updated = True
+                    continue # 次の明細へ
+            except Exception as e:
+                print(f"Warning: Could not parse POST response: {e}")
+            
             new_results.append({
                 "id": detail_id,
                 "text": f"| {app_no:<5} | {date_val:<10} | {app['申請者']['text']:<8} | {route_key:<20} | {unit_price:<6} | {ai_correct:<6} | {status:<10} | {reason} |"
@@ -269,6 +319,9 @@ def main():
         if master_updated:
             with open(MASTER_FILE, "w", encoding="utf-8") as f: 
                 json.dump(master, f, indent=2, ensure_ascii=False)
+        if blacklist_updated:
+            with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
+                json.dump(blacklist, f, indent=2, ensure_ascii=False)
         print(f"完了: {len(new_results)} 件の明細を更新しました。")
     else:
         print("本日の新規明細はありません。")
