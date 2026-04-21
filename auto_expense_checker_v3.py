@@ -37,11 +37,12 @@ import re
 from datetime import datetime
 #import google.generativeai as genai
 from google import genai
+from google.genai import types
 
 # --- 設定 ---
-#BASE_URL = "https://platform.kpscorp.jp/kpspl"!pip install -Uqq google-generativeai
+BASE_URL = "https://platform.kpscorp.jp/kpspl"
 #BASE_URL = "http://localhost:8080/kpspl"
-BASE_URL = "https://y-officesc.kpscorp.jp/platform"
+#BASE_URL = "https://y-officesc.kpscorp.jp/platform"
 SEND_ACCOUNT = "katsusuke.taira@kpscorp.co.jp"
 # 送信先アドレスを複数指定（カンマ区切り）
 RECIPIENTS = "katsusuke.taira@kpscorp.co.jp, katsu.taira@gmail.com" 
@@ -50,6 +51,7 @@ RECIPIENTS = "katsusuke.taira@kpscorp.co.jp, katsu.taira@gmail.com"
 DATA_DIR = "/home/taira/tools/"
 MASTER_FILE = os.path.join(DATA_DIR, "fare_master.json")
 HISTORY_FILE = os.path.join(DATA_DIR, "processed_ids.json")
+APP_CACHE_FILE = os.path.join(DATA_DIR, "app_cache.json")
 BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklist_ids.json")
 REPORT_FILE = os.path.join(DATA_DIR, "daily_report.txt")
 COOKIE_FILE = os.path.join(DATA_DIR, "cookies.txt")
@@ -131,12 +133,13 @@ def verify_with_ai(route, date_val, amount, is_round, payee):
         申請金額（片道相当）: {amount}円 
 
         【判定プロセス】
-        1. 最新の支払先の運賃改定情報を【参考：料金改定マスターデータ】を基にを検索。
+        1. 最新の支払先の運賃改定情報を【参考：料金改定マスターデータ】を確認。
         2. 利用日({date_val})がどの改定日の適用期間に該当するかを判断。
         3. その時点での正確な運賃(IC優先)を特定。
         4. 申請金額と特定した運賃を比較し、一致したら「一致」、一致でなく20円以内なら「妥当」、それ以上なら「要確認」と判断。
         5. 根拠のない情報は含めないでください。必ず公式発表や信頼できるニュースソースに基づく情報を提供してください。
-    
+        6. 申請者は"{route} 乗換案内" というキーワードで検索して金額を申請してきているので、結果が要確認となった場合は、そのキーワードで検索した結果を吟味し、再度どちらが正しいかを判断してください。
+                         
         【参考：料金改定マスターデータ】
         以下の情報は、各社の過去および予定されている料金改定日です。判定の参考にしてください。
         {revision_info}
@@ -152,9 +155,27 @@ def verify_with_ai(route, date_val, amount, is_round, payee):
         }}
         """
         client = genai.Client()
-        response = client.models.generate_content(model="gemini-3-flash-preview", contents=prompt)
+        #response = client.models.generate_content(model="gemini-3-flash-preview", contents=prompt)
         #response = client.models.generate_content(model="gemini-3.1-pro-preview", contents=prompt)
-        
+        # 1. 検索ツールを定義
+        grounding_tool = types.Tool(
+            google_search=types.GoogleSearch()
+        )
+
+        # 2. 設定（Config）にツールを組み込む
+        config = types.GenerateContentConfig(
+            tools=[grounding_tool]
+        )
+        # 3. 実行
+        response = client.models.generate_content(
+            #model="gemini-3.1-pro-preview", 
+            model="gemini-3-flash-preview", 
+            contents=prompt,
+            config=config
+        )
+        # どこから情報を得たか（Grounding Metadata）を確認する場合
+        #if response.candidates[0].grounding_metadata:
+        #    print("\n[検索クエリ]:", response.candidates[0].grounding_metadata.search_entry_point)
         # JSON部分を抽出
         text = response.text
         match = re.search(r'\{.*\}', text, re.DOTALL)
@@ -196,6 +217,14 @@ def main():
     if os.path.exists(BLACKLIST_FILE):
         with open(BLACKLIST_FILE, "r") as f: blacklist = json.load(f)
 
+    # 申請書キャッシュの読み込み
+    app_cache = {}
+    if os.path.exists(APP_CACHE_FILE):
+        try:
+            with open(APP_CACHE_FILE, "r") as f: app_cache = json.load(f)
+        except:
+            app_cache = {}
+
     data = fetch_json(f"{BASE_URL}/ad/Appform/table", token)
     app_table = next((t for t in data["tables"] if t.get("id") == "AppformTable"), None)
     target_apps = [row for row in app_table["rows"] if "2:申請中" in row["状態"] or "4:承認済" in row["状態"]]
@@ -203,12 +232,23 @@ def main():
     new_results = []
     master_updated = False
     blacklist_updated = False
+    app_cache_updated = False
 
     for app in target_apps:
         app_no = app["申請書No."]["text"]
+        last_updated = app.get("最終更新日", "")
+        
+        # 申請書単位のキャッシュチェック: チェック済みかつ更新がない場合は詳細取得をスキップ
+        if app_no in app_cache and app_cache[app_no] == last_updated:
+            continue
+
         detail_data = fetch_json(app["申請書No."]["url"], token)
         detail_table = next((t for t in detail_data["tables"] if t.get("id") == "AppdetailTable"), None)
-        if not detail_table: continue
+        if not detail_table: 
+            # テーブルがない場合もチェック済みとして記録
+            app_cache[app_no] = last_updated
+            app_cache_updated = True
+            continue
 
         for row in detail_table["rows"]:
             amount_str = row.get("交通費", "¥0")
@@ -225,10 +265,10 @@ def main():
                 # 万が一取れない場合は従来の形式をフォールバックとして使用
                 db_id = f"{app_no}_{row['日付']['text']}_{row.get('from','')}_{row.get('to','')}_{amount_str}"
 
-            # 157行目付近: 作業済みチェック (aijadgeがあるか)
-            if row_fields.get("AI判定") and row_fields["AI判定"].get("value"):
+            # 157行目付近: 作業済みチェック (aijadgeがあるか、NG/Unknown、Pending以外はスキップ)
+            if row_fields.get("AI判定") and row_fields["AI判定"].get("value") and row_fields["AI判定"]["value"] not in ["NG/Unknown", "Pending"]:
                 continue
-          
+            bfStatus = row_fields.get("AI判定", {}).get("value", "N/A")
             # ブラックリストに入っている場合はスキップ
             if db_id in blacklist:
                 print(f"Skipping blacklisted item ID: {db_id}")
@@ -257,7 +297,7 @@ def main():
             print(f"AI調査中: {date_val} {route_key}...")
             ai_res = verify_with_ai(route_key, date_val, unit_price, is_round, row.get("支払先名",""))
             if ai_res:
-                status, reason, last_revision_date = ai_res["status"], ai_res["reason"], ai_res["last_revision_date"]
+                thought ,status, reason, last_revision_date = ai_res["thought"], ai_res["status"], ai_res["reason"], ai_res["last_revision_date"]
                 if route_key not in master: master[route_key] = {}
                 master[route_key][last_revision_date] = {
                     "ai_correct": ai_res["correct_fare"],
@@ -267,9 +307,11 @@ def main():
                 master_updated = True
             else:
                 status, reason = "NG/Unknown", "AI判定失敗"
-
+            # statusが要確認でbfStatusがPending以外の場合は、statusuをPendingに上書き
+            if status == "要確認" and bfStatus != "Pending":
+                status = "Pending"
             # 193行目付近: POST処理
-            print(f"POST送信中: {detail_id} -> {status}")
+            print(f"POST送信中: {detail_id} {ai_correct}-> {status}")
             post_url = f"{BASE_URL}/ad/Appdetail/sv"
             post_payload = {}
             # detailで入手した全フィールドを設定
@@ -280,7 +322,7 @@ def main():
             # 指定されたフィールドを上書き・追加
             post_payload["aijadge"] = status
             post_payload["aifare"] = ai_correct
-            post_payload["aicomment"] = reason
+            post_payload["aicomment"] = reason + "\n[算出根拠]:\n" + thought
             post_payload["post"] = "true"
             
             post_res = post_data_to_sv(post_url, token, post_payload)
@@ -312,8 +354,14 @@ def main():
                 "text": f"| {app_no:<5} | {date_val:<10} | {app['申請者']['text']:<8} | {route_key:<20} | {unit_price:<6} | {ai_correct:<6} | {status:<10} | {reason} |"
             })
             processed_ids.append(detail_id)
+        
+        # 処理が完了した申請書をキャッシュに追加
+        app_cache[app_no] = last_updated
+        app_cache_updated = True
 
-    if new_results:
+    #メッセージにタイムスタンプを追加
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if new_results or app_cache_updated:
         # 履歴とマスターの更新のみ行う
         with open(HISTORY_FILE, "w") as f: json.dump(processed_ids, f)
         if master_updated:
@@ -322,9 +370,17 @@ def main():
         if blacklist_updated:
             with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
                 json.dump(blacklist, f, indent=2, ensure_ascii=False)
-        print(f"完了: {len(new_results)} 件の明細を更新しました。")
+        
+        if app_cache_updated:
+            with open(APP_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(app_cache, f, indent=2, ensure_ascii=False)
+        
+        if new_results:
+            print(f"{timestamp} 完了: {len(new_results)} 件の明細を更新しました。")
+        else:
+            print(f"{timestamp} 完了: キャッシュを更新しました（新規明細なし）。")
     else:
-        print("本日の新規明細はありません。")
+        print(f"{timestamp} 今回、新規明細はありません。")
 
 if __name__ == "__main__":
     main()
