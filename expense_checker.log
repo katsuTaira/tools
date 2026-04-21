@@ -1,0 +1,38 @@
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+2026-04-21 15:00:22 今回、新規明細はありません。
+Skipping blacklisted item ID: 80
+本日の新規明細はありません。
+Traceback (most recent call last):
+  File "/home/taira/tools/auto_expense_checker_v3.py", line 331, in <module>
+    main_trip()
+    ^^^^^^^^^
+NameError: name 'main_trip' is not defined
