@@ -25,6 +25,7 @@ import subprocess
 import json
 import os
 import re
+import urllib.parse
 from datetime import datetime
 from google import genai
 from google.genai import types
@@ -42,12 +43,18 @@ DATA_DIR = "/home/taira/tools/"
 MASTER_FILE = os.path.join(DATA_DIR, "fare_master.json")
 HISTORY_FILE = os.path.join(DATA_DIR, "processed_ids.json")
 APP_CACHE_FILE = os.path.join(DATA_DIR, "app_cache.json")
+#APP_CACHE_FILE = os.path.join(DATA_DIR, "app_cache_test.json")
 BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklist_ids.json")
+#BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklist_ids_test.json")
+TRP_CACHE_FILE = os.path.join(DATA_DIR, "trp_cache.json")
+#TRP_CACHE_FILE = os.path.join(DATA_DIR, "trp_cache_test.json")
 REPORT_FILE = os.path.join(DATA_DIR, "daily_report.txt")
 COOKIE_FILE = os.path.join(DATA_DIR, "cookies.txt")
 
 # Gemini API設定 (環境変数 GOOGLE_API_KEY を使用)
 API_KEY = os.environ.get("GOOGLE_API_KEY")
+
+blacklist = {}
 
 def get_token():
     return subprocess.check_output(["gcloud", "auth", "print-identity-token"]).decode("utf-8").strip()
@@ -93,7 +100,7 @@ def post_data_to_sv(url, token, data):
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.stdout
 
-def verify_with_ai(route, date_val, amount, is_round, payee):
+def verify_with_ai(route, date_val, amount, is_round, payee, content=""):
     """AIが日付から運賃改定を自己検索して判定する"""
     if not API_KEY:
         return {"status": "Error", "reason": "API_KEY未設定"}
@@ -118,6 +125,7 @@ def verify_with_ai(route, date_val, amount, is_round, payee):
         利用日: {date_val}
         区間: {route} (支払先: {payee})
         申請金額（片道相当）: {amount}円 
+        補足情報 : {content}
 
         【判定プロセス】
         1. 最新の支払先の運賃改定情報を【参考：料金改定マスターデータ】を確認。
@@ -161,29 +169,22 @@ def verify_with_ai(route, date_val, amount, is_round, payee):
         return None
 
 def main():
-    if not API_KEY:
-        print("GOOGLE_API_KEY is not set.")
+    token = init()
+    if not token:
+        print("トークンの取得に失敗しました。")
         return
+    doKeihi(token)
+    doSyuchou(token)
 
-    if os.path.exists(COOKIE_FILE):
-        os.remove(COOKIE_FILE)
-
-    token = get_token()
-    
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-        
+def doKeihi(token):
+    #print("経費申請を処理中...")
     if not os.path.exists(MASTER_FILE):
         with open(MASTER_FILE, "w") as f: json.dump({}, f)
     with open(MASTER_FILE, "r") as f: master = json.load(f)
     
-    processed_ids = []
-    if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, "r") as f: processed_ids = json.load(f)
-
-    blacklist = []
-    if os.path.exists(BLACKLIST_FILE):
-        with open(BLACKLIST_FILE, "r") as f: blacklist = json.load(f)
+    #processed_ids = []
+    #if os.path.exists(HISTORY_FILE):
+    #    with open(HISTORY_FILE, "r") as f: processed_ids = json.load(f)
 
     # 申請書キャッシュの読み込み
     app_cache = {}
@@ -216,8 +217,9 @@ def main():
             app_cache[app_no] = last_updated
             app_cache_updated = True
             continue
-
+        update_detail_ok = True
         for row in detail_table["rows"]:
+            update_row_ok = True
             amount_str = row.get("交通費", "¥0")
             if amount_str == "¥0": continue
             
@@ -242,7 +244,7 @@ def main():
             unit_price = raw_amt / 2 if is_round else raw_amt
             ai_correct = "N/A"
             
-            print(f"AI調査中: {date_val} {route_key}...")
+            print(f"AI調査中: {app_no} {date_val} {route_key}...")
             ai_res = verify_with_ai(route_key, date_val, unit_price, is_round, row.get("支払先名",""))
             if ai_res:
                 thought, status, reason, last_rev = ai_res["thought"], ai_res["status"], ai_res["reason"], ai_res["last_revision_date"]
@@ -252,47 +254,206 @@ def main():
 
                 print(f"POST送信中: {db_id} {ai_correct}-> {status}")
                 post_url = f"{BASE_URL}/ad/Appdetail/sv"
-                post_payload = {f_info["name"]: f_info["value"] for f_name, f_info in row_fields.items() if isinstance(f_info, dict) and "name" in f_info}
+                post_payload = {
+                    f_info["name"]: f_info["value"] 
+                    for f_name, f_info in row_fields.items() 
+                    if isinstance(f_info, dict) and "name" in f_info and "value" in f_info
+                }                   
                 post_payload.update({"aijadge": status, "aifare": ai_correct, "aicomment": reason + "\n[算出根拠]:\n" + thought, "post": "true"})
                 
                 post_res = post_data_to_sv(post_url, token, post_payload)
-                
-                try:
-                    res_json = json.loads(post_res)
-                    if any(m.get("type") == "error" for m in res_json.get("messages", [])):
-                        print(f"ERROR returned from server for ID {db_id}")
-                        if db_id not in blacklist:
-                            blacklist.append(db_id)
-                            blacklist_updated = True
-                        continue
-                except Exception as e:
-                    print(f"Warning: Could not parse POST response: {e}")
-            
+                blacklist_updated = post_row_check(db_id, post_res)
+            else:
+                print(f"AI判定に失敗: {db_id}")
+                update_row_ok = False
+                update_detail_ok = False
+            if update_row_ok:
                 new_results.append({
                     "id": detail_id,
                     "text": f"| {app_no:<5} | {date_val:<10} | {app['申請者']['text']:<8} | {route_key:<20} | {unit_price:<6} | {ai_correct:<6} | {status:<10} | {reason} |"
                 })
-                processed_ids.append(detail_id)
-        
-                app_cache[app_no] = last_updated
-                app_cache_updated = True
+        if update_detail_ok:
+            #processed_ids.append(detail_id)
+            app_cache[app_no] = last_updated
+            app_cache_updated = True
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if blacklist_updated:
+        with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
+            json.dump(blacklist, f, indent=2, ensure_ascii=False)
     if new_results or app_cache_updated:
-        with open(HISTORY_FILE, "w") as f: json.dump(processed_ids, f)
+        #with open(HISTORY_FILE, "w") as f: json.dump(processed_ids, f)
         if app_cache_updated:
             with open(APP_CACHE_FILE, "w", encoding="utf-8") as f: 
                 json.dump(app_cache, f, indent=2, ensure_ascii=False)
-        if blacklist_updated:
-            with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
-                json.dump(blacklist, f, indent=2, ensure_ascii=False)
-        
         if new_results:
             print(f"{timestamp} 完了: {len(new_results)} 件の明細を更新しました。")
         else:
             print(f"{timestamp} 完了: キャッシュを更新しました。")
-    else:
-        print(f"{timestamp} 今回、新規明細はありません。")
+    #else:
+        #print(f"{timestamp} 今回、新規明細はありません。")
+
+def doSyuchou(token):
+    trp_cache = {}
+    trp_results = []
+    blacklist_updated = False
+    trp_cache_updated = False
+    if os.path.exists(TRP_CACHE_FILE):
+        try:
+            with open(TRP_CACHE_FILE, "r") as f: trp_cache = json.load(f)
+        except:
+            trp_cache = {}
+    #print("出張届及精算承認書を処理中...")
+    trip_type_encoded = urllib.parse.quote("出張届及精算承認書")
+    trip_data = fetch_json(f"{BASE_URL}/ad/adGenesheet/table?v={trip_type_encoded}", token)
+    trip_table = next((t for t in trip_data["tables"] if t.get("id") == "GenesheetTable"), None)
+    if trip_table:
+        target_trips = [row for row in trip_table["rows"] if "2:申請中" in row["状態"] or "4:承認済" in row["状態"]]
+        for trip in target_trips:
+            app_no = trip["申請書No."]["text"]
+            last_updated = trip.get("更新日", "")
+            if app_no in trp_cache and trp_cache[app_no] == last_updated:
+                continue
+
+            detail_data = fetch_json(trip["申請書No."]["url"], token)
+            row_fields = detail_data["forms"][0]["fields"]
+            
+            # scriptVarsからparamsを取得
+            script_vars = detail_data["forms"][0].get("scriptVars", [])
+            if not script_vars: continue
+            # シングルクォートをダブルクォートに置換して JSON としてパース
+            params_str = script_vars[0]["params"].replace("'", '"')
+            params_obj = json.loads(params_str)
+
+            # itemTableJsonToTableTable 内の運賃をチェック
+            item_table = next((t for t in detail_data["tables"] if t.get("id") == "itemTableJsonToTableTable"), None)
+            if not item_table:
+                trp_cache[app_no] = last_updated
+                trp_cache_updated = True
+                continue
+            update_detail_ok = True
+            for row in item_table["rows"]:
+                update_row_ok = True
+                if "運賃" not in row.get("項目", {}).get("text", ""):
+                    continue
+                if row.get("AI判定") and row["AI判定"] not in ["NG/Unknown", "Pending"]:
+                    continue
+                data_ix = row.get("項目", {}).get("data-ix")
+                if not data_ix: continue
+
+                db_id = f"trip_{app_no}_{data_ix}"
+                if db_id in blacklist:
+                    print(f"Skipping blacklisted item ID: {db_id}")
+                    continue
+
+                # 明細の詳細をPOSTで取得
+                params_for_detail = params_obj.copy()
+                params_for_detail["rowId"] = data_ix
+                post_payload = {
+                    f_info["name"]: f_info["value"] 
+                    for f_name, f_info in row_fields.items() 
+                    if isinstance(f_info, dict) and "name" in f_info and "value" in f_info
+                }
+                post_payload.update({"itemTableParams": json.dumps(params_for_detail), "head": "itemTable"})
+                item_detail_res = post_data_to_sv(f"{BASE_URL}/ad/itemTable/edit", token, post_payload)
+                item_detail = json.loads(item_detail_res)
+                item_fields = item_detail["forms"][0]["fields"]
+ 
+                # 運賃情報の抽出 (itemTableのフィールド名に合わせる)
+                date_val = item_fields.get("月／日", {}).get("value", "")
+                from_st = item_fields.get("駅from", {}).get("value", "")
+                to_st = item_fields.get("駅to", {}).get("value", "")
+                amount_val = item_fields.get("金額", {}).get("value", "0")
+                payee = item_fields.get("支払先名", {}).get("value", "")
+                content = item_fields.get("項目", {}).get("value", "")
+                
+                if not date_val or amount_val == "0": continue
+                
+                route_key = f"{from_st}-{to_st}"
+                raw_amt = int(str(amount_val).replace(",",""))
+                #is_round = "往復" in content
+                #unit_price = raw_amt / 2 if is_round else raw_amt
+                is_round = False  # 出張届の運賃は基本的に片道で申請される想定のため、往復判定は行わない
+                unit_price = raw_amt
+
+                print(f"AI調査中 (Trip): {app_no} {date_val} {route_key}...")
+                ai_res = verify_with_ai(route_key, date_val, unit_price, is_round, payee, content)
+                if ai_res:
+                    thought, status, reason, last_rev = ai_res["thought"], ai_res["status"], ai_res["reason"], ai_res["last_revision_date"]
+                    ai_correct = ai_res["correct_fare"]
+                    if status == "要確認" and item_fields.get("AI判定", {}).get("value") != "Pending":
+                        status = "Pending"
+                    print(f"POST送信中: {db_id} {ai_correct}-> {status}")
+                    post_payload = {
+                        f_info["name"]: f_info["value"] 
+                        for f_name, f_info in item_fields.items() 
+                        if isinstance(f_info, dict) and "name" in f_info and "value" in f_info
+                    }                   
+                    post_payload.update({"aijadge": status, "aifare": ai_correct, "aicomment": reason + "\n[算出根拠]:\n" + thought, "post": "true"})
+                    post_payload.update({"itemTableParams": json.dumps(params_for_detail), "head": "itemTable"})
+                    # 保存先URLは経費精算と同じパターンと仮定
+                    post_res = post_data_to_sv(f"{BASE_URL}/ad/itemTable/sv", token, post_payload)
+                    blacklist_updated = post_row_check(db_id, post_res)
+                else:
+                    print(f"AI判定に失敗: {db_id}")
+                    update_row_ok = False
+                    update_detail_ok = False
+                if update_row_ok:
+                    trp_results.append({"id": db_id, "text": f"| {app_no:<5} | {date_val:<10} | {trip['申請者']['text']:<8} | {route_key:<20} | {unit_price:<6} | {ai_correct:<6} | {status:<10} | {reason} |"})
+            if update_detail_ok:
+                trp_cache[app_no] = last_updated
+                trp_cache_updated = True 
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if blacklist_updated:
+        with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
+            json.dump(blacklist, f, indent=2, ensure_ascii=False)
+    if trp_results or trp_cache_updated:
+        if trp_cache_updated:
+            with open(TRP_CACHE_FILE, "w", encoding="utf-8") as f: json.dump(trp_cache, f, indent=2, ensure_ascii=False)
+        if trp_results:
+            print(f"{timestamp} 完了: {len(trp_results)} 件の出張明細を更新しました。")
+        else:
+            print(f"{timestamp} 完了: 出張キャッシュを更新しました。")
+    #else:
+        #print(f"{timestamp} 今回、新規出張明細はありません。")
+
+def post_row_check(db_id, post_res):
+    blacklist_updated = False
+    try:
+        res_json = json.loads(post_res)
+        if any(isinstance(m, dict) and m.get("type") == "error" for m in res_json.get("messages", [])):
+                            # POSTエラー時の処理                            
+            fields = res_json["forms"][0]["fields"]
+                            # fieldsの中で error がるものを探す
+            error_keys = [k for k,v in fields.items() if isinstance(v, dict) and v.get("error")]
+            error_detail =  f"{error_keys[0]} : {fields[error_keys[0]].get('error')}"
+            blacklist[db_id] = error_detail
+            blacklist_updated = True
+            print(f"POSTでエラー発生 {db_id}: {error_detail}")
+            update_row_ok = False
+            update_detail_ok = False
+    except Exception as e:
+        print(f"Warning: Could not parse POST response: {e}")
+    return blacklist_updated
+
+def init():
+    if not API_KEY:
+        print("GOOGLE_API_KEY is not set.")
+        return
+
+    if os.path.exists(COOKIE_FILE):
+        os.remove(COOKIE_FILE)
+
+    token = get_token()
+    
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+    global blacklist
+    blacklist = {}
+    if os.path.exists(BLACKLIST_FILE):
+        with open(BLACKLIST_FILE, "r") as f: blacklist = json.load(f)
+
+    return token
 
 if __name__ == "__main__":
     main()

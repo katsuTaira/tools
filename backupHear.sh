@@ -26,7 +26,7 @@ PREFIX=home_
 LOCLADIR=/home/taira/
 FILENM=$PREFIX${DATE}.$SUFIX
 BACKFILENM=${BAKDIR}/$FILENM
-EVALCMD="zip $BACKFILENM -y -r $LOCLADIR -x '*.pyenv/*' '*mypy/*' '*.local/*' '*.cache/*' '*.vscode/*' '*.dotnet/*' '*aws/*' '*.vscode-server/*' '*.vscode-remote-containers/*'"
+EVALCMD="zip $BACKFILENM -y -r $LOCLADIR -x '*.pyenv/*' '*mypy/*' '*.local/*' '*.cache/*' '*.vscode/*' '*.dotnet/*' '*aws/*' '*.vscode-server/*' '*.vscode-remote-containers/*' '*.windsurf-server/*' '*.cursor-server/*' '*.codeium/*' '*.npm*' '*.deb' '*.zip' '*node_modules/*' '*go/pkg/*' '*go/bin/*' '*go/src/*' '*go/cache/*' '*go/mod/*' '*go/sumdb/*'"
 /home/taira/tools/backupHearSub.sh $PREFIX $LOCLADIR "$EVALCMD"
 
 
