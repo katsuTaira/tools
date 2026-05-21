@@ -49,12 +49,14 @@ BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklist_ids.json")
 TRP_CACHE_FILE = os.path.join(DATA_DIR, "trp_cache.json")
 #TRP_CACHE_FILE = os.path.join(DATA_DIR, "trp_cache_test.json")
 REPORT_FILE = os.path.join(DATA_DIR, "daily_report.txt")
+ROUTE_HISTORY_FILE = os.path.join(DATA_DIR, "route_history.json")
 COOKIE_FILE = os.path.join(DATA_DIR, "cookies.txt")
 
 # Gemini API設定 (環境変数 GOOGLE_API_KEY を使用)
 API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 blacklist = {}
+route_history = {} # 同一経路の判定履歴を保持する辞書
 
 def get_token():
     return subprocess.check_output(["gcloud", "auth", "print-identity-token"]).decode("utf-8").strip()
@@ -100,8 +102,8 @@ def post_data_to_sv(url, token, data):
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.stdout
 
-def verify_with_ai(route, date_val, amount, is_round, payee, content=""):
-    """AIが日付から運賃改定を自己検索して判定する"""
+def verify_with_ai(route, date_val, amount, is_round, payee, content="", history=None):
+    """AIが日付から運賃改定を自己検索して判定する。過去の履歴があれば考慮する。"""
     if not API_KEY:
         return {"status": "Error", "reason": "API_KEY未設定"}
         
@@ -117,6 +119,14 @@ def verify_with_ai(route, date_val, amount, is_round, payee, content=""):
             print(f"料金改定マスタの読み込みに失敗しました: {e}")
 
     try:
+        history_section = ""
+        if history:
+            history_section = "\n【参考：過去の同一区間での判定履歴】\n"
+            # 直近3件程度を表示
+            for h in history[-3:]:
+                history_section += f"- 利用日: {h['date']}, 判定: {h['status']}, 運賃: {h['fare']}円, 理由: {h['comment'].split('\\n')[0]}\n"
+            history_section += "上記は過去の判定結果です。これらと整合性を保ちつつ（運賃改定日を跨ぐ場合はその差を考慮して）、今回の利用日における妥当性を判断してください。\n"
+
         prompt = f"""
         あなたは正確性を最重視する運賃の専門家であり、最新の運賃情報を常に把握しています。
         以下の交通運賃の妥当性を、webの情報を参考に利用日時点の正確な運賃（特に運賃改定情報を考慮して）で調査・判定してください。
@@ -126,7 +136,7 @@ def verify_with_ai(route, date_val, amount, is_round, payee, content=""):
         区間: {route} (支払先: {payee})
         申請金額（片道相当）: {amount}円 
         補足情報 : {content}
-
+        {history_section}
         【判定プロセス】
         1. 最新の支払先の運賃改定情報を【参考：料金改定マスターデータ】を確認。
         2. 利用日({date_val})がどの改定日の適用期間に該当するかを判断。
@@ -175,6 +185,11 @@ def main():
         return
     doKeihi(token)
     doSyuchou(token)
+
+    # 履歴を保存
+    with open(ROUTE_HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(route_history, f, indent=2, ensure_ascii=False)
+    #print(f"判定履歴を保存しました: {len(route_history)} 経路")
 
 def doKeihi(token):
     #print("経費申請を処理中...")
@@ -229,7 +244,20 @@ def doKeihi(token):
             
             db_id = row_fields.get("id", {}).get("value") or f"{app_no}_{row['日付']['text']}_{row.get('from','')}_{row.get('to','')}_{amount_str}"
 
-            if row_fields.get("AI判定") and row_fields["AI判定"].get("value") and row_fields["AI判定"]["value"] not in ["NG/Unknown", "Pending"]:
+            # 判定済み（スキップ対象）の場合は履歴に蓄積してスキップ
+            status_val = row_fields.get("AI判定", {}).get("value")
+            if status_val and status_val in ["一致", "妥当"]:
+                # 経路を正規化（ソートして結合）
+                stations = sorted([row.get('from',''), row.get('to','')])
+                r_key = f"{stations[0]}-{stations[1]}"
+                if r_key not in route_history:
+                    route_history[r_key] = []
+                route_history[r_key].append({
+                    "date": row["日付"]["text"],
+                    "status": status_val,
+                    "fare": row_fields.get("AI運賃", {}).get("value", "N/A"),
+                    "comment": row_fields.get("AIコメント", {}).get("value", "")
+                })
                 continue
             
             if db_id in blacklist:
@@ -237,7 +265,11 @@ def doKeihi(token):
                 continue
             
             detail_id = f"{app_no}_{row['日付']['text']}_{row.get('from','')}_{row.get('to','')}_{amount_str}"
-            route_key = f"{row.get('from','')}-{row.get('to','')}"
+            
+            # AI調査用の経路キーも正規化
+            stations = sorted([row.get('from',''), row.get('to','')])
+            route_key = f"{stations[0]}-{stations[1]}"
+            
             date_val = row["日付"]["text"]
             raw_amt = int(amount_str.replace("¥","").replace(",",""))
             is_round = "往復" in row.get("内容", "")
@@ -245,7 +277,9 @@ def doKeihi(token):
             ai_correct = "N/A"
             
             print(f"AI調査中: {app_no} {date_val} {route_key}...")
-            ai_res = verify_with_ai(route_key, date_val, unit_price, is_round, row.get("支払先名",""))
+            # 過去の履歴を取得
+            hist = route_history.get(route_key)
+            ai_res = verify_with_ai(route_key, date_val, unit_price, is_round, row.get("支払先名",""), history=hist)
             if ai_res:
                 thought, status, reason, last_rev = ai_res["thought"], ai_res["status"], ai_res["reason"], ai_res["last_revision_date"]
                 ai_correct = ai_res["correct_fare"]
@@ -263,6 +297,17 @@ def doKeihi(token):
                 
                 post_res = post_data_to_sv(post_url, token, post_payload)
                 blacklist_updated = post_row_check(db_id, post_res)
+                
+                # 新しく判定した結果も履歴に蓄積
+                if status in ["一致", "妥当"]:
+                    if route_key not in route_history:
+                        route_history[route_key] = []
+                    route_history[route_key].append({
+                        "date": date_val,
+                        "status": status,
+                        "fare": ai_correct,
+                        "comment": reason + "\n[算出根拠]:\n" + thought
+                    })
             else:
                 print(f"AI判定に失敗: {db_id}")
                 update_row_ok = False
@@ -337,8 +382,7 @@ def doSyuchou(token):
                 update_row_ok = True
                 if "運賃" not in row.get("項目", {}).get("text", ""):
                     continue
-                if row.get("AI判定") and row["AI判定"] not in ["NG/Unknown", "Pending"]:
-                    continue
+                
                 data_ix = row.get("項目", {}).get("data-ix")
                 if not data_ix: continue
 
@@ -359,6 +403,25 @@ def doSyuchou(token):
                 item_detail_res = post_data_to_sv(f"{BASE_URL}/ad/itemTable/edit", token, post_payload)
                 item_detail = json.loads(item_detail_res)
                 item_fields = item_detail["forms"][0]["fields"]
+                
+                # 詳細データが得られたので、ここで判定済みチェックと履歴蓄積を行う
+                status_val = item_fields.get("AI判定", {}).get("value")
+                if status_val and status_val in ["一致", "妥当"]:
+                    # 履歴として記録（詳細データから正確に取得）
+                    from_s = item_fields.get("駅from", {}).get("value", "")
+                    to_s = item_fields.get("駅to", {}).get("value", "")
+                    # 経路を正規化
+                    stations = sorted([from_s, to_s])
+                    r_key = f"{stations[0]}-{stations[1]}"
+                    if r_key not in route_history:
+                        route_history[r_key] = []
+                    route_history[r_key].append({
+                        "date": item_fields.get("月／日", {}).get("value", ""),
+                        "status": status_val,
+                        "fare": item_fields.get("金額", {}).get("value", "N/A"),
+                        "comment": item_fields.get("AIコメント", {}).get("value", "")
+                    })
+                    continue
  
                 # 運賃情報の抽出 (itemTableのフィールド名に合わせる)
                 date_val = item_fields.get("月／日", {}).get("value", "")
@@ -370,7 +433,10 @@ def doSyuchou(token):
                 
                 if not date_val or amount_val == "0": continue
                 
-                route_key = f"{from_st}-{to_st}"
+                # AI調査用の経路キーも正規化
+                stations = sorted([from_st, to_st])
+                route_key = f"{stations[0]}-{stations[1]}"
+                
                 raw_amt = int(str(amount_val).replace(",",""))
                 #is_round = "往復" in content
                 #unit_price = raw_amt / 2 if is_round else raw_amt
@@ -378,7 +444,9 @@ def doSyuchou(token):
                 unit_price = raw_amt
 
                 print(f"AI調査中 (Trip): {app_no} {date_val} {route_key}...")
-                ai_res = verify_with_ai(route_key, date_val, unit_price, is_round, payee, content)
+                # 過去の履歴を取得
+                hist = route_history.get(route_key)
+                ai_res = verify_with_ai(route_key, date_val, unit_price, is_round, payee, content, history=hist)
                 if ai_res:
                     thought, status, reason, last_rev = ai_res["thought"], ai_res["status"], ai_res["reason"], ai_res["last_revision_date"]
                     ai_correct = ai_res["correct_fare"]
@@ -396,6 +464,17 @@ def doSyuchou(token):
                     # 保存先URLは経費精算と同じパターンと仮定
                     post_res = post_data_to_sv(f"{BASE_URL}/ad/itemTable/sv", token, post_payload)
                     blacklist_updated = post_row_check(db_id, post_res)
+
+                    # 新しく判定した結果も履歴に蓄積
+                    if status in ["一致", "妥当"]:
+                        if route_key not in route_history:
+                            route_history[route_key] = []
+                        route_history[route_key].append({
+                            "date": date_val,
+                            "status": status,
+                            "fare": ai_correct,
+                            "comment": reason + "\n[算出根拠]:\n" + thought
+                        })
                 else:
                     print(f"AI判定に失敗: {db_id}")
                     update_row_ok = False
@@ -450,10 +529,17 @@ def init():
     
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
-    global blacklist
+    global blacklist, route_history
     blacklist = {}
     if os.path.exists(BLACKLIST_FILE):
         with open(BLACKLIST_FILE, "r") as f: blacklist = json.load(f)
+
+    route_history = {}
+    if os.path.exists(ROUTE_HISTORY_FILE):
+        try:
+            with open(ROUTE_HISTORY_FILE, "r") as f: route_history = json.load(f)
+        except:
+            route_history = {}
 
     return token
 

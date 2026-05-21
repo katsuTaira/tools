@@ -6,6 +6,10 @@ import requests
 from datetime import datetime
 
 # --- 設定 ---
+# gog 設定
+GOG_PATH = "/home/linuxbrew/.linuxbrew/bin/gog"
+ACCOUNT = "katsusuke.taira@kpscorp.co.jp"
+
 # Google Drive
 DRIVE_PARENT_FOLDER_ID = "17od521b_rBrYI2F8ovNJDWyCTMS3Idk5"
 LOCAL_DIR = "/mnt/c/Users/K00013/KPS新聞/"
@@ -20,12 +24,19 @@ HEADERS = {
     "Accept": "application/json"
 }
 
+def run_gog(args):
+    """gogコマンドをアカウント指定と空パスワードで実行"""
+    env = os.environ.copy()
+    env["GOG_KEYRING_PASSWORD"] = ""
+    cmd = [GOG_PATH, "-a", ACCOUNT] + args
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    return result
+
 # --- Google Drive 処理 ---
 
 def get_drive_subfolders(parent_id):
     """サブフォルダの一覧を取得"""
-    cmd = ["gog", "ls", "--parent", parent_id, "--json", "--results-only"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_gog(["ls", "--parent", parent_id, "--json", "--results-only"])
     if result.returncode != 0:
         print(f"Error listing subfolders: {result.stderr}")
         return []
@@ -33,8 +44,7 @@ def get_drive_subfolders(parent_id):
 
 def get_pdfs_in_folder(folder_id):
     """指定フォルダ内のPDF一覧を取得"""
-    cmd = ["gog", "ls", "--parent", folder_id, "--json", "--results-only"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_gog(["ls", "--parent", folder_id, "--json", "--results-only"])
     if result.returncode != 0:
         return []
     return [f for f in json.loads(result.stdout) if f['mimeType'] == 'application/pdf']
@@ -52,8 +62,7 @@ def download_missing_pdfs():
             local_path = os.path.join(LOCAL_DIR, pdf['name'])
             if not os.path.exists(local_path):
                 print(f"  Downloading new file: {pdf['name']}...")
-                dl_cmd = ["gog", "download", pdf['id'], "--output", local_path]
-                dl_res = subprocess.run(dl_cmd, capture_output=True, text=True)
+                dl_res = run_gog(["download", pdf['id'], "--output", local_path])
                 if dl_res.returncode == 0:
                     downloaded_count += 1
                 else:

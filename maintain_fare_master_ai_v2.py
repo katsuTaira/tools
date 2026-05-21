@@ -4,7 +4,16 @@ import re
 from datetime import datetime
 
 # --- 設定 ---
-MASTER_FILE = '/home/taira/tools/fare_revision_master.json'
+# 環境変数 TEST_MODE が "true" の場合はテスト用ファイルを使用する
+TEST_MODE = os.environ.get("TEST_MODE") == "true"
+
+if TEST_MODE:
+    MASTER_FILE = '/home/taira/tools/fare_revision_master_test.json'
+    print("!!! TEST MODE ENABLED !!!")
+    print(f"Using test file: {MASTER_FILE}")
+else:
+    MASTER_FILE = '/home/taira/tools/fare_revision_master.json'
+
 # Gemini API設定 (環境変数 GOOGLE_API_KEY を使用)
 API_KEY = os.environ.get("GOOGLE_API_KEY")
 
@@ -15,16 +24,16 @@ def update_master_with_ai():
         return
 
     try:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
     except ImportError:
-        print("Error: google-generativeai library is not installed.")
-        print("Please run: pip install google-generativeai")
+        print("Error: google-genai library is not installed.")
+        print("Please run: pip install google-genai")
         return
 
-    genai.configure(api_key=API_KEY)
-    
-    # 2026年3月のJR東日本の改定など、具体的なターゲットを含めて検索
-    model = genai.GenerativeModel('gemini-3.1-pro-preview')
+    client = genai.Client()
+    grounding_tool = types.Tool(google_search=types.GoogleSearch())
+    config = types.GenerateContentConfig(tools=[grounding_tool])
     
     prompt = """
     あなたは正確性を最重視する運賃の専門家であり、最新の運賃情報を常に把握しています。
@@ -32,6 +41,7 @@ def update_master_with_ai():
     
     以下の条件でwebを調査し情報を抽出してください。
     特に 以下のページ等を参考にしてください
+    https://www.navitime.co.jp/revision/latest/
     https://teiki-web.ekispert.com/blog/info_fare_revision
     特に関東地区のバス会社については以下のページに有る会社をできるだけ含めてください
     https://www.kouritu1000.net/bus.htm：
@@ -47,9 +57,13 @@ def update_master_with_ai():
     }
     """
 
-    print("Searching for latest fare revision info using Gemini AI...")
+    print(f"Searching for latest fare revision info using Gemini AI (Output: {MASTER_FILE})...")
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-3-flash-preview", 
+            contents=prompt,
+            config=config
+        )
         # JSON部分を抽出
         json_text = response.text
         match = re.search(r'\{.*\}', json_text, re.DOTALL)

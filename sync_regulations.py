@@ -5,15 +5,23 @@ import os
 from datetime import datetime, timezone
 
 # --- 設定 ---
+GOG_PATH = "/home/linuxbrew/.linuxbrew/bin/gog"
 FOLDER_ID = "15foXxqFV0wGRDxtBw0jbmHNmuxAl2uTq"
 LOCAL_DIR = "/mnt/c/Users/K00013/OneDrive/ドキュメント/qa_poc_light/就業規則"
 ACCOUNT = "katsusuke.taira@kpscorp.co.jp"
 # --- --- ---
 
+def run_gog(args):
+    """gogコマンドをアカウント指定と空パスワードで実行"""
+    env = os.environ.copy()
+    env["GOG_KEYRING_PASSWORD"] = ""
+    cmd = [GOG_PATH, "-a", ACCOUNT] + args
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    return result
+
 def get_drive_files():
     """Drive上のファイル一覧を取得"""
-    cmd = ["gog", "ls", "--parent", FOLDER_ID, "--json", "--max", "100", "--results-only"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_gog(["ls", "--parent", FOLDER_ID, "--json", "--max", "100", "--results-only"])
     if result.returncode != 0:
         print(f"Error listing files: {result.stderr}")
         return []
@@ -21,16 +29,14 @@ def get_drive_files():
 
 def download_file(file_id, output_path):
     """ファイルをダウンロード"""
-    cmd = ["gog", "download", file_id, "--output", output_path]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_gog(["download", file_id, "--output", output_path])
     return result.returncode == 0
 
 def send_notification(downloaded_files):
     """メール送信"""
     subject = "【自動通知】就業規則フォルダが更新されました"
     body = "以下のファイルが新しくダウンロードされました：\n\n" + "\n".join(downloaded_files)
-    cmd = ["gog", "send", "-a", ACCOUNT, "--to", ACCOUNT, "--subject", subject, "--body", body]
-    subprocess.run(cmd)
+    run_gog(["send", "--to", ACCOUNT, "--subject", subject, "--body", body])
 
 def main():
     if not os.path.exists(LOCAL_DIR):
