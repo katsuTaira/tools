@@ -3,9 +3,11 @@ import os
 import json
 import subprocess
 import requests
+import re
 from datetime import datetime
 
 # --- 設定 ---
+# ... (rest of settings remains same)
 # gog 設定
 GOG_PATH = "/home/linuxbrew/.linuxbrew/bin/gog"
 ACCOUNT = "katsusuke.taira@kpscorp.co.jp"
@@ -16,13 +18,28 @@ LOCAL_DIR = "/mnt/c/Users/K00013/KPS新聞/"
 
 # Open WebUI
 OPEN_WEBUI_BASE_URL = "https://open-webui2.kpssys.com/api/v1"
-API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjJjNmFkMjI0LTcwNTQtNDE1Zi1iNTJhLWUzZmYzODU2MjI4ZSIsImV4cCI6MTc3OTI2Mjk3OCwianRpIjoiZWE4YTQwMjQtNzdjNC00MWY0LWI5YWMtYjllNmE4MDg5ZWExIn0.aCcdnEywRxleYbvN3fXj8imuhj2aQnth9h-ykQ2vAY0"
-KNOWLEDGE_ID = "61f39728-f32e-41f9-aed4-d543bac732d7"
+API_KEY = "sk-bde765af6155408aa242542155945065"
+KNOWLEDGE_ID = "932fab48-7b18-4749-afb6-700996b70cd9"
 
 HEADERS = {
     "Authorization": f"Bearer {API_KEY}",
     "Accept": "application/json"
 }
+
+def is_target_file(filename):
+    """2022年4月以降のPDFファイルかどうかを判定"""
+    if not filename.endswith('.pdf'):
+        return False
+    # ファイル名から 'YYYY.M' または 'YYYY.MM' を探す
+    match = re.search(r'(\d{4})\.(\d{1,2})', filename)
+    if match:
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if year > 2022:
+            return True
+        if year == 2022 and month >= 4:
+            return True
+    return False
 
 def run_gog(args):
     """gogコマンドをアカウント指定と空パスワードで実行"""
@@ -59,6 +76,8 @@ def download_missing_pdfs():
         print(f" Scanning folder: {folder['name']}...")
         pdfs = get_pdfs_in_folder(folder['id'])
         for pdf in pdfs:
+            if not is_target_file(pdf['name']):
+                continue
             local_path = os.path.join(LOCAL_DIR, pdf['name'])
             if not os.path.exists(local_path):
                 print(f"  Downloading new file: {pdf['name']}...")
@@ -72,15 +91,21 @@ def download_missing_pdfs():
 
 # --- Open WebUI 処理 ---
 
+TIMEOUT = 600  # 10 minutes
+
 def get_knowledge_base_data():
     """ナレッジ一覧から対象のデータを取得"""
     url = f"{OPEN_WEBUI_BASE_URL}/knowledge/"
-    response = requests.get(url, headers=HEADERS)
-    if response.status_code != 200:
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        if response.status_code != 200:
+            return None
+        
+        kb_list = response.json()
+        return next((kb for kb in kb_list if kb['id'] == KNOWLEDGE_ID), None)
+    except requests.exceptions.Timeout:
+        print(" Error: Timeout getting knowledge base data.")
         return None
-    
-    kb_list = response.json()
-    return next((kb for kb in kb_list if kb['id'] == KNOWLEDGE_ID), None)
 
 def get_existing_kb_files():
     """ナレッジベース内の既存ファイル名リストを取得"""
@@ -92,24 +117,32 @@ def get_existing_kb_files():
 def upload_file_to_ui(file_path):
     """ファイルをアップロードして file_id を取得"""
     url = f"{OPEN_WEBUI_BASE_URL}/files/"
-    with open(file_path, 'rb') as f:
-        files = {'file': f}
-        response = requests.post(url, headers=HEADERS, files=files)
-    
-    if response.status_code != 200:
-        print(f" Error uploading {os.path.basename(file_path)}: {response.text}")
+    try:
+        with open(file_path, 'rb') as f:
+            files = {'file': f}
+            response = requests.post(url, headers=HEADERS, files=files, timeout=TIMEOUT)
+        
+        if response.status_code != 200:
+            print(f" Error uploading {os.path.basename(file_path)}: {response.text}")
+            return None
+        return response.json().get('id')
+    except requests.exceptions.Timeout:
+        print(f" Error: Timeout uploading {os.path.basename(file_path)}.")
         return None
-    return response.json().get('id')
 
 def add_file_to_knowledge(file_id):
     """file_id をナレッジベースに追加"""
     # 基本の add エンドポイントを試す
     url = f"{OPEN_WEBUI_BASE_URL}/knowledge/{KNOWLEDGE_ID}/file/add"
     payload = {"file_id": file_id}
-    response = requests.post(url, headers=HEADERS, json=payload)
-    
-    if response.status_code == 200:
-        return True
+    try:
+        response = requests.post(url, headers=HEADERS, json=payload, timeout=TIMEOUT)
+        
+        if response.status_code == 200:
+            return True
+    except requests.exceptions.Timeout:
+        print(f" Error: Timeout adding file {file_id} to knowledge base.")
+        return False
     
     # 失敗した場合は全体更新 (update) を試みるフォールバック
     kb_data = get_knowledge_base_data()
@@ -124,17 +157,37 @@ def add_file_to_knowledge(file_id):
             "description": kb_data.get('description'),
             "data": {"file_ids": file_ids}
         }
-        res_update = requests.post(url_update, headers=HEADERS, json=update_payload)
-        return res_update.status_code == 200
+        try:
+            res_update = requests.post(url_update, headers=HEADERS, json=update_payload, timeout=TIMEOUT)
+            return res_update.status_code == 200
+        except requests.exceptions.Timeout:
+            print(f" Error: Timeout updating knowledge base with file {file_id}.")
+            return False
 
     return False
+
+def reindex_all_knowledge():
+    """すべてのナレッジベースの再インデックスをトリガーする"""
+    print("Triggering all Knowledge Bases reindex...")
+    url = f"{OPEN_WEBUI_BASE_URL}/knowledge/reindex"
+    try:
+        response = requests.post(url, headers=HEADERS, timeout=TIMEOUT)
+        if response.status_code == 200:
+            print(" Successfully triggered reindex.")
+            return True
+        else:
+            print(f" Failed to trigger reindex: {response.text}")
+            return False
+    except requests.exceptions.Timeout:
+        print(" Error: Timeout triggering reindex.")
+        return False
 
 def sync_to_open_webui():
     """ローカルのPDFをOpen WebUIに同期"""
     print("Syncing local files to Open WebUI Knowledge Base...")
     existing_filenames = get_existing_kb_files()
     
-    local_files = [f for f in os.listdir(LOCAL_DIR) if f.endswith('.pdf')]
+    local_files = [f for f in os.listdir(LOCAL_DIR) if is_target_file(f)]
     files_to_upload = [f for f in local_files if f not in existing_filenames]
 
     if not files_to_upload:
@@ -158,9 +211,16 @@ def sync_to_open_webui():
         else:
             print(f"  Failed to upload {filename}.")
     
-    print(f"Open WebUI sync complete. {uploaded_count} files processed.")
+    print(f"Open WebUI upload complete. {uploaded_count} files processed.")
+    
+    # 新たに追加したファイルがある場合のみ再インデックスを実行
+    if uploaded_count > 0:
+        reindex_all_knowledge()
+    else:
+        print(" No new files were successfully uploaded. Skipping reindex.")
 
 def main():
+    print(f"--- Task started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
     if not os.path.exists(LOCAL_DIR):
         os.makedirs(LOCAL_DIR, exist_ok=True)
 

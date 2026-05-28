@@ -15,3 +15,7 @@ Searching for latest fare revision info using Gemini AI (Output: /home/taira/too
 AI found info for 36 companies.
 Update complete. Total companies: 76
 New companies added: 22, New dates added: 40
+Searching for latest fare revision info using Gemini AI (Output: /home/taira/tools/fare_revision_master.json)...
+AI found info for 36 companies.
+Update complete. Total companies: 89
+New companies added: 13, New dates added: 32
