@@ -29,6 +29,19 @@ import urllib.parse
 from datetime import datetime
 from google import genai
 from google.genai import types
+# sync_regulations.py の run_gog を参考にメール送信用のユーティリティを用意
+try:
+    from sync_regulations import run_gog
+except Exception:
+    def run_gog(args):
+        """簡易フォールバック: gog をラップして実行する"""
+        env = os.environ.copy()
+        env["GOG_KEYRING_PASSWORD"] = ""
+        GOG_PATH = "/home/linuxbrew/.linuxbrew/bin/gog"
+        ACCOUNT_FALLBACK = os.environ.get("GOG_ACCOUNT", "katsusuke.taira@kpscorp.co.jp")
+        cmd = [GOG_PATH, "-a", ACCOUNT_FALLBACK] + args
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        return result
 
 # --- 設定 ---
 BASE_URL = "https://platform.kpscorp.jp/kpspl"
@@ -36,7 +49,7 @@ BASE_URL = "https://platform.kpscorp.jp/kpspl"
 #BASE_URL = "https://y-officesc.kpscorp.jp/platform"
 SEND_ACCOUNT = "katsusuke.taira@kpscorp.co.jp"
 # 送信先アドレスを複数指定（カンマ区切り）
-RECIPIENTS = "katsusuke.taira@kpscorp.co.jp, katsu.taira@gmail.com" 
+RECIPIENTS = "katsusuke.taira@kpscorp.co.jp" 
 
 # データの保存場所を固定
 DATA_DIR = "/home/taira/tools/"
@@ -59,7 +72,26 @@ blacklist = {}
 route_history = {} # 同一経路の判定履歴を保持する辞書
 
 def get_token():
-    return subprocess.check_output(["gcloud", "auth", "print-identity-token"]).decode("utf-8").strip()
+    try:
+        return subprocess.check_output(["gcloud", "auth", "print-identity-token"]).decode("utf-8").strip()
+    except subprocess.CalledProcessError as e:
+        print(f"gcloud token error: {e}")
+        # トークン取得失敗時に管理者へ通知メールを送信
+        try:
+            subject = "[自動通知] gcloud の認証が必要です"
+            body = (
+                "自動経費点検処理で gcloud のトークン更新に失敗しました。\n"
+                "非対話モードのため再認証が必要です。\n\n"
+                "実行ホストで以下コマンドを実行してください:\n"
+                "$ gcloud auth login\n\n"
+                f"発生時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            )
+            # RECIPIENTS はカンマ区切りの文字列の想定
+            run_gog(["send", "--to", RECIPIENTS, "--subject", subject, "--body", body])
+            print("通知メールを送信しました。")
+        except Exception as ex:
+            print(f"通知メール送信に失敗しました: {ex}")
+        return None
 
 def fetch_json(url, token):
     if "format=json" not in url:
@@ -163,7 +195,7 @@ def verify_with_ai(route, date_val, amount, is_round, payee, content="", history
         grounding_tool = types.Tool(google_search=types.GoogleSearch())
         config = types.GenerateContentConfig(tools=[grounding_tool])
         response = client.models.generate_content(
-            model="gemini-3-flash-preview", 
+            model="gemini-3.1-flash-lite", 
             contents=prompt,
             config=config
         )
