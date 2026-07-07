@@ -73,6 +73,22 @@ route_history = {} # 同一経路の判定履歴を保持する辞書
 
 def get_token():
     try:
+    #    return subprocess.check_output(["gcloud", "auth", "print-identity-token"]).decode("utf-8").strip()
+        # 1. サービスアカウントのJSONキーを使ってバックグラウンドで認証
+        # ※キーファイルのパスは、実際の配置場所に合わせて変更してください
+        KEY_FILE = "/home/taira/.config/gcloud/service-account-key.json"
+        
+        if not os.path.exists(KEY_FILE):
+            print(f"Error: キーファイルが見つかりません: {KEY_FILE}")
+            return None
+            
+        # サービスアカウントとしてログインを強制
+        subprocess.run([
+            "gcloud", "auth", "activate-service-account", 
+            f"--key-file={KEY_FILE}"
+        ], check=True, capture_output=True)
+
+        # 2. サービスアカウントのIDトークンを発行
         return subprocess.check_output(["gcloud", "auth", "print-identity-token"]).decode("utf-8").strip()
     except subprocess.CalledProcessError as e:
         print(f"gcloud token error: {e}")
@@ -364,11 +380,11 @@ def doKeihi(token):
             with open(APP_CACHE_FILE, "w", encoding="utf-8") as f: 
                 json.dump(app_cache, f, indent=2, ensure_ascii=False)
         if new_results:
-            print(f"{timestamp} 完了: {len(new_results)} 件の明細を更新しました。")
+            print(f"{timestamp} 完了: {len(new_results)} 件の明細を更新しました。v8")
         else:
-            print(f"{timestamp} 完了: キャッシュを更新しました。")
+            print(f"{timestamp} 完了: キャッシュを更新しました。v8")
     else:
-        print(f"{timestamp} 今回、新規明細はありません。")
+        print(f"{timestamp} 今回、新規明細はありません。v8")
 
 def doSyuchou(token):
     trp_cache = {}

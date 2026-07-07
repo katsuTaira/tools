@@ -1,0 +1,1 @@
+gog auth add katsusuke.taira@kpscorp.co.jp --manual --services gmail --force-consent

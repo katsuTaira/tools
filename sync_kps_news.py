@@ -4,10 +4,10 @@ import json
 import subprocess
 import requests
 import re
+import time
 from datetime import datetime
 
 # --- 設定 ---
-# ... (rest of settings remains same)
 # gog 設定
 GOG_PATH = "/home/linuxbrew/.linuxbrew/bin/gog"
 ACCOUNT = "katsusuke.taira@kpscorp.co.jp"
@@ -16,21 +16,23 @@ ACCOUNT = "katsusuke.taira@kpscorp.co.jp"
 DRIVE_PARENT_FOLDER_ID = "17od521b_rBrYI2F8ovNJDWyCTMS3Idk5"
 LOCAL_DIR = "/mnt/c/Users/K00013/KPS新聞/"
 
-# Open WebUI
+# Open WebUI (Production)
 OPEN_WEBUI_BASE_URL = "https://open-webui2.kpssys.com/api/v1"
-API_KEY = "sk-bde765af6155408aa242542155945065"
-KNOWLEDGE_ID = "932fab48-7b18-4749-afb6-700996b70cd9"
+API_KEY = "sk-517492096074459c82eea231b6af3c5f"
+#KNOWLEDGE_ID = "932fab48-7b18-4749-afb6-700996b70cd9"
+KNOWLEDGE_ID = "63afb4f7-3e4e-46d6-8340-21cab281631b"
 
 HEADERS = {
     "Authorization": f"Bearer {API_KEY}",
     "Accept": "application/json"
 }
 
+TIMEOUT = 600  # 10 minutes
+
 def is_target_file(filename):
     """2022年4月以降のPDFファイルかどうかを判定"""
     if not filename.endswith('.pdf'):
         return False
-    # ファイル名から 'YYYY.M' または 'YYYY.MM' を探す
     match = re.search(r'(\d{4})\.(\d{1,2})', filename)
     if match:
         year = int(match.group(1))
@@ -91,31 +93,50 @@ def download_missing_pdfs():
 
 # --- Open WebUI 処理 ---
 
-TIMEOUT = 600  # 10 minutes
-
-def get_knowledge_base_data():
-    """ナレッジ一覧から対象のデータを取得"""
-    url = f"{OPEN_WEBUI_BASE_URL}/knowledge/"
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
-        if response.status_code != 200:
-            return None
-        
-        kb_list = response.json()
-        return next((kb for kb in kb_list if kb['id'] == KNOWLEDGE_ID), None)
-    except requests.exceptions.Timeout:
-        print(" Error: Timeout getting knowledge base data.")
-        return None
-
 def get_existing_kb_files():
     """ナレッジベース内の既存ファイル名リストを取得"""
-    kb_data = get_knowledge_base_data()
-    if not kb_data:
+    # ページネーション対応: 全件取得する
+    files = []
+    page = 1
+    per_page = 100
+    try:
+        while True:
+            url = f"{OPEN_WEBUI_BASE_URL}/knowledge/{KNOWLEDGE_ID}/files?page={page}&per_page={per_page}"
+            response = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+            if response.status_code != 200:
+                print(f" Error getting KB files (page {page}): {response.text}")
+                break
+
+            res_data = response.json()
+            items = res_data.get('items', [])
+            if not items:
+                break
+
+            for f in items:
+                if isinstance(f, dict):
+                    files.append(f.get('meta', {}).get('name', f.get('filename')))
+
+            # API が返す total フィールドがあればそれで完了判定
+            total = res_data.get('total')
+            if isinstance(total, int):
+                if len(files) >= total:
+                    break
+                else:
+                    page += 1
+                    continue
+
+            # total が無ければフォールバックで判定
+            if len(items) < per_page:
+                break
+            page += 1
+
+        return files
+    except Exception as e:
+        print(f" Error getting KB files: {e}")
         return []
-    return [f['meta']['name'] for f in kb_data.get('files', []) if 'meta' in f and 'name' in f['meta']]
 
 def upload_file_to_ui(file_path):
-    """ファイルをアップロードして file_id を取得"""
+    """ファイルをアップロードして処理完了まで待機し、file_id を取得"""
     url = f"{OPEN_WEBUI_BASE_URL}/files/"
     try:
         with open(file_path, 'rb') as f:
@@ -125,66 +146,47 @@ def upload_file_to_ui(file_path):
         if response.status_code != 200:
             print(f" Error uploading {os.path.basename(file_path)}: {response.text}")
             return None
-        return response.json().get('id')
-    except requests.exceptions.Timeout:
-        print(f" Error: Timeout uploading {os.path.basename(file_path)}.")
+        
+        file_id = response.json().get('id')
+        if not file_id:
+            return None
+
+        # 処理完了を待機 (ポーリング)
+        print(f"  Waiting for processing: {os.path.basename(file_path)}...")
+        for _ in range(30):  # 最大5分 (10秒 * 30)
+            status_res = requests.get(f"{OPEN_WEBUI_BASE_URL}/files/{file_id}", headers=HEADERS, timeout=TIMEOUT)
+            if status_res.status_code == 200:
+                data = status_res.json().get('data', {})
+                status = data.get('status')
+                if status == 'completed':
+                    print(f"  Processing completed: {os.path.basename(file_path)}")
+                    return file_id
+                elif status == 'failed':
+                    print(f"  Processing failed: {os.path.basename(file_path)} - {data.get('error', 'Unknown error')}")
+                    return None
+            time.sleep(10)
+        
+        print(f"  Timeout waiting for processing: {os.path.basename(file_path)}")
+        return None
+
+    except Exception as e:
+        print(f" Error uploading {os.path.basename(file_path)}: {e}")
         return None
 
 def add_file_to_knowledge(file_id):
     """file_id をナレッジベースに追加"""
-    # 基本の add エンドポイントを試す
     url = f"{OPEN_WEBUI_BASE_URL}/knowledge/{KNOWLEDGE_ID}/file/add"
     payload = {"file_id": file_id}
     try:
         response = requests.post(url, headers=HEADERS, json=payload, timeout=TIMEOUT)
-        
-        if response.status_code == 200:
-            return True
-    except requests.exceptions.Timeout:
-        print(f" Error: Timeout adding file {file_id} to knowledge base.")
-        return False
-    
-    # 失敗した場合は全体更新 (update) を試みるフォールバック
-    kb_data = get_knowledge_base_data()
-    if kb_data:
-        file_ids = [f['id'] for f in kb_data.get('files', [])]
-        if file_id not in file_ids:
-            file_ids.append(file_id)
-        
-        url_update = f"{OPEN_WEBUI_BASE_URL}/knowledge/{KNOWLEDGE_ID}/update"
-        update_payload = {
-            "name": kb_data.get('name'),
-            "description": kb_data.get('description'),
-            "data": {"file_ids": file_ids}
-        }
-        try:
-            res_update = requests.post(url_update, headers=HEADERS, json=update_payload, timeout=TIMEOUT)
-            return res_update.status_code == 200
-        except requests.exceptions.Timeout:
-            print(f" Error: Timeout updating knowledge base with file {file_id}.")
-            return False
-
-    return False
-
-def reindex_all_knowledge():
-    """すべてのナレッジベースの再インデックスをトリガーする"""
-    print("Triggering all Knowledge Bases reindex...")
-    url = f"{OPEN_WEBUI_BASE_URL}/knowledge/reindex"
-    try:
-        response = requests.post(url, headers=HEADERS, timeout=TIMEOUT)
-        if response.status_code == 200:
-            print(" Successfully triggered reindex.")
-            return True
-        else:
-            print(f" Failed to trigger reindex: {response.text}")
-            return False
-    except requests.exceptions.Timeout:
-        print(" Error: Timeout triggering reindex.")
+        return response.status_code == 200
+    except Exception as e:
+        print(f" Error adding to KB: {e}")
         return False
 
 def sync_to_open_webui():
     """ローカルのPDFをOpen WebUIに同期"""
-    print("Syncing local files to Open WebUI Knowledge Base...")
+    print(f"Syncing local files to Open WebUI Production ({OPEN_WEBUI_BASE_URL})...")
     existing_filenames = get_existing_kb_files()
     
     local_files = [f for f in os.listdir(LOCAL_DIR) if is_target_file(f)]
@@ -209,15 +211,9 @@ def sync_to_open_webui():
             else:
                 print(f"  Failed to register {filename} to knowledge base.")
         else:
-            print(f"  Failed to upload {filename}.")
+            print(f"  Failed to upload or process {filename}.")
     
-    print(f"Open WebUI upload complete. {uploaded_count} files processed.")
-    
-    # 新たに追加したファイルがある場合のみ再インデックスを実行
-    if uploaded_count > 0:
-        reindex_all_knowledge()
-    else:
-        print(" No new files were successfully uploaded. Skipping reindex.")
+    print(f"Open WebUI sync complete. {uploaded_count} files processed.")
 
 def main():
     print(f"--- Task started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")

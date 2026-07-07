@@ -19,3 +19,21 @@ Searching for latest fare revision info using Gemini AI (Output: /home/taira/too
 AI found info for 36 companies.
 Update complete. Total companies: 89
 New companies added: 13, New dates added: 32
+Searching for latest fare revision info using Gemini AI (Output: /home/taira/tools/fare_revision_master.json)...
+An error occurred: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}
+Searching for latest fare revision info using Gemini AI (Output: /home/taira/tools/fare_revision_master.json)...
+AI found info for 37 companies.
+Update complete. Total companies: 101
+New companies added: 12, New dates added: 24
+Searching for latest fare revision info using Gemini AI (Output: /home/taira/tools/fare_revision_master.json)...
+AI found info for 42 companies.
+Update complete. Total companies: 112
+New companies added: 11, New dates added: 39
+Searching for latest fare revision info using Gemini AI (Output: /home/taira/tools/fare_revision_master.json)...
+AI found info for 39 companies.
+Update complete. Total companies: 123
+New companies added: 11, New dates added: 30
+Searching for latest fare revision info using Gemini AI (Output: /home/taira/tools/fare_revision_master.json)...
+AI found info for 28 companies.
+Update complete. Total companies: 127
+New companies added: 4, New dates added: 18

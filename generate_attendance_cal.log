@@ -1,0 +1,93 @@
+Googleカレンダーから予定を取得中...
+10 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+10 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+10 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+10 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+10 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+9 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+9 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+9 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+9 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+9 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/K00013/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+9 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/taira/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/taira/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+Googleカレンダーから予定を取得中...
+10 件の予定から出勤時間を計算中...
+
+iCalendarファイルを保存しました: /mnt/c/Users/taira/OneDrive/ドキュメント/attendance.ics
+SCPでファイルを転送中: /mnt/c/Users/taira/OneDrive/ドキュメント/attendance.ics -> SWT:/a0/var/pub/video/
+SCP転送が完了しました。
+2026-07-04 18:00:03 Googleカレンダーから予定を取得中...
+2026-07-04 18:00:03 Error running gog calendar events: failed to get primary calendar: Get "https://www.googleapis.com/calendar/v3/users/me/calendarList/primary?alt=json&prettyPrint=false": round trip: oauth2: cannot fetch token: 401 Unauthorized
+Response: {
+  "error": "unauthorized_client",
+  "error_description": "Client is unauthorized to retrieve access tokens using this method, or client not authorized for any of the scopes requested."
+}
+2026-07-04 18:00:03 イベントが取得できませんでした、または予定がありません。
+2026-07-05 18:00:03 Googleカレンダーから予定を取得中...
+2026-07-05 18:00:03 Error running gog calendar events: failed to get primary calendar: Get "https://www.googleapis.com/calendar/v3/users/me/calendarList/primary?alt=json&prettyPrint=false": round trip: oauth2: cannot fetch token: 401 Unauthorized
+Response: {
+  "error": "unauthorized_client",
+  "error_description": "Client is unauthorized to retrieve access tokens using this method, or client not authorized for any of the scopes requested."
+}
+2026-07-05 18:00:03 イベントが取得できませんでした、または予定がありません。
+2026-07-06 18:00:02 Googleカレンダーから予定を取得中...
+2026-07-06 18:00:03 Error running gog calendar events: failed to get primary calendar: Get "https://www.googleapis.com/calendar/v3/users/me/calendarList/primary?alt=json&prettyPrint=false": round trip: oauth2: cannot fetch token: 401 Unauthorized
+Response: {
+  "error": "unauthorized_client",
+  "error_description": "Client is unauthorized to retrieve access tokens using this method, or client not authorized for any of the scopes requested."
+}
+2026-07-06 18:00:03 イベントが取得できませんでした、または予定がありません。

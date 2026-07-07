@@ -39,6 +39,7 @@ def send_notification(downloaded_files):
     run_gog(["send", "--to", ACCOUNT, "--subject", subject, "--body", body])
 
 def main():
+    print(f"--- Task started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
     if not os.path.exists(LOCAL_DIR):
         print(f"Local directory not found: {LOCAL_DIR}")
         return
